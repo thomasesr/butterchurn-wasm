@@ -1,0 +1,15 @@
+{
+  "name": "khviz",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "khviz_bg.wasm",
+    "khviz.js",
+    "khviz.d.ts"
+  ],
+  "main": "khviz.js",
+  "types": "khviz.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

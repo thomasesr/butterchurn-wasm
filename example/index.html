@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>khviz — Milkdrop WASM test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; color: #fff; font-family: monospace; overflow: hidden; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    #ui {
+      position: fixed; top: 12px; left: 12px; z-index: 10;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    button {
+      background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.3);
+      color: #fff; padding: 6px 14px; cursor: pointer; font-family: monospace;
+      font-size: 13px; border-radius: 4px;
+    }
+    button:hover { background: rgba(255,255,255,0.22); }
+    #status { font-size: 11px; color: #aaa; }
+    #preset-name { font-size: 12px; color: #6cf; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #fps { font-size: 11px; color: #8a8; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="ui">
+    <div id="status">Loading WASM…</div>
+    <div id="preset-name"></div>
+    <div id="fps"></div>
+    <button id="btn-next">Next Preset</button>
+    <button id="btn-audio">Start Audio (mic)</button>
+  </div>
+
+  <script type="module">
+    import init, { Visualizer } from './pkg/khviz.js';
+
+    // ── Synthetic preset (minimal, uses pre-compiled shaders omitted here) ──────
+    // A minimal no-op preset with just baseVals so we can test the plumbing.
+    const MINIMAL_PRESET = {
+      version: 2,
+      baseVals: {
+        decay: 0.96,
+        zoom: 1.01,
+        zoomexp: 1.0,
+        rot: 0.004,
+        warp: 0.03,
+        warpscale: 1.0,
+        warpanimspeed: 1.0,
+        cx: 0.5, cy: 0.5,
+        dx: 0.0, dy: 0.0,
+        sx: 1.0, sy: 1.0,
+        wave_mode: 0,
+        wave_a: 0.8, wave_r: 0.5, wave_g: 0.8, wave_b: 1.0,
+        wave_x: 0.5, wave_y: 0.5, wave_scale: 1.5,
+        gammaadj: 1.25,
+      },
+      waves: [],
+      shapes: [],
+      init_eqs_eel: '',
+      frame_eqs_eel: 'q1 = sin(time) * 0.5 + 0.5;',
+      warp: 'shader_body { ret = texture(sampler_main, uv).rgb * decay; }',
+      comp: 'shader_body { ret = pow(max(texture(sampler_main, uv).rgb, vec3(0.0)), vec3(1.0/max(gammaadj, 0.01))); }',
+    };
+
+    // ── Preset library ──────────────────────────────────────────────────────────
+    // Ideally import from butterchurn-presets; here we cycle through variations.
+    const PRESETS = [
+      { ...MINIMAL_PRESET, baseVals: { ...MINIMAL_PRESET.baseVals, wave_r: 1.0, wave_g: 0.2, wave_b: 0.2, rot: 0.01 } },
+      { ...MINIMAL_PRESET, baseVals: { ...MINIMAL_PRESET.baseVals, wave_r: 0.2, wave_g: 1.0, wave_b: 0.2, zoom: 1.02, warp: 0.06 } },
+      { ...MINIMAL_PRESET, baseVals: { ...MINIMAL_PRESET.baseVals, wave_r: 0.2, wave_g: 0.5, wave_b: 1.0, zoom: 0.99, rot: -0.005 } },
+      { ...MINIMAL_PRESET, baseVals: { ...MINIMAL_PRESET.baseVals, wave_mode: 1, wave_r: 1.0, wave_g: 1.0, wave_b: 0.0, decay: 0.92 } },
+      { ...MINIMAL_PRESET, baseVals: { ...MINIMAL_PRESET.baseVals, wave_mode: 4, wave_r: 1.0, wave_g: 0.5, wave_b: 1.0, zoom: 1.015 } },
+    ];
+    const PRESET_NAMES = [
+      'Red Spiral', 'Green Zoom', 'Blue Zoom Out', 'Yellow Horizontal', 'Purple Orbit',
+    ];
+
+    // ── Synthetic audio ─────────────────────────────────────────────────────────
+    function makeSyntheticAudio(t) {
+      const FFT = 2048;
+      const td = new Float32Array(FFT);
+      const fr = new Float32Array(FFT);
+
+      // Waveform: mixed sine waves with beat pulse
+      const beat = (Math.sin(t * 2.0 * Math.PI * 1.33) > 0.85) ? 1.0 : 0.0;
+      for (let i = 0; i < FFT; i++) {
+        const x = i / FFT;
+        td[i] =
+          Math.sin(t * 220 * 2 * Math.PI + x * 8) * 0.3 +
+          Math.sin(t * 110 * 2 * Math.PI + x * 4) * 0.2 +
+          Math.sin(t * 440 * 2 * Math.PI + x * 16) * 0.1 +
+          beat * Math.sin(x * 32) * 0.5;
+      }
+
+      // Frequency: simulate bass/mid/treb energy
+      for (let i = 0; i < FFT; i++) {
+        const hz = i * 44100 / FFT;
+        const bassEnv = Math.exp(-hz / 200) * (1.0 + beat * 3.0);
+        const midEnv = Math.exp(-Math.abs(hz - 800) / 500) * 0.5;
+        const trebEnv = Math.exp(-Math.abs(hz - 5000) / 2000) * 0.3;
+        fr[i] = (bassEnv + midEnv + trebEnv) * (0.8 + 0.2 * Math.random());
+      }
+
+      return { td, fr };
+    }
+
+    // ── Main ────────────────────────────────────────────────────────────────────
+    async function main() {
+      const status = document.getElementById('status');
+      const presetName = document.getElementById('preset-name');
+      const fpsEl = document.getElementById('fps');
+
+      status.textContent = 'Initializing WASM…';
+      await init();
+      status.textContent = 'Ready';
+
+      const canvas = document.getElementById('canvas');
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      canvas.width = W;
+      canvas.height = H;
+
+      let viz;
+      try {
+        viz = new Visualizer(canvas, { width: W, height: H, outputFXAA: true });
+      } catch (e) {
+        status.textContent = 'WebGL2 error: ' + e;
+        console.error(e);
+        return;
+      }
+
+      let presetIdx = 0;
+      function loadPreset(idx, blendTime = 2.0) {
+        try {
+          viz.loadPreset(PRESETS[idx], blendTime);
+          presetName.textContent = PRESET_NAMES[idx];
+          status.textContent = '';
+        } catch (e) {
+          status.textContent = 'Preset error: ' + e;
+          console.error(e);
+        }
+      }
+      loadPreset(0, 0);
+
+      document.getElementById('btn-next').onclick = () => {
+        presetIdx = (presetIdx + 1) % PRESETS.length;
+        loadPreset(presetIdx, 2.0);
+      };
+
+      // Optional mic input
+      let micAnalyser = null;
+      let micTd = null, micFr = null;
+      document.getElementById('btn-audio').onclick = async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const ctx = new AudioContext();
+          const src = ctx.createMediaStreamSource(stream);
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 2048;
+          src.connect(analyser);
+          micTd = new Float32Array(analyser.fftSize);
+          micFr = new Float32Array(analyser.frequencyBinCount);
+          micAnalyser = analyser;
+          document.getElementById('btn-audio').textContent = 'Mic active ✓';
+        } catch (e) {
+          status.textContent = 'Mic error: ' + e;
+        }
+      };
+
+      // Auto-advance presets every 12 s
+      let lastAutoSwitch = performance.now();
+      const AUTO_INTERVAL = 12000;
+
+      let frameCount = 0;
+      let lastFpsTime = performance.now();
+
+      function frame(now) {
+        // FPS counter
+        frameCount++;
+        if (now - lastFpsTime >= 1000) {
+          fpsEl.textContent = `${frameCount} fps`;
+          frameCount = 0;
+          lastFpsTime = now;
+        }
+
+        // Auto-advance
+        if (now - lastAutoSwitch > AUTO_INTERVAL) {
+          presetIdx = (presetIdx + 1) % PRESETS.length;
+          loadPreset(presetIdx, 2.5);
+          lastAutoSwitch = now;
+        }
+
+        // Audio data
+        const t = now / 1000;
+        if (micAnalyser) {
+          micAnalyser.getFloatTimeDomainData(micTd);
+          micAnalyser.getFloatFrequencyData(micFr);
+          // convert dB to linear
+          const linFr = micFr.map(db => Math.pow(10, db / 20));
+          viz.setAudioData(micTd, new Float32Array(linFr));
+        } else {
+          const { td, fr } = makeSyntheticAudio(t);
+          viz.setAudioData(td, fr);
+        }
+
+        viz.render(now);
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+
+      // Resize
+      window.addEventListener('resize', () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        viz.setRendererSize(canvas.width, canvas.height);
+      });
+    }
+
+    main().catch(console.error);
+  </script>
+</body>
+</html>
