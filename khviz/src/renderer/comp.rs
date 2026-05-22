@@ -24,12 +24,7 @@ static QUAD: [f32; 6] = [
 impl CompPass {
     pub fn new(gl: &GL, body: &str) -> Result<Self, String> {
         let frag_body = if body.trim().is_empty() { FALLBACK_COMP_BODY } else { body };
-        // gammaadj needs to be a uniform in the body context; add it
-        let frag_with_gamma = format!(
-            "uniform float gammaadj;\n{}",
-            build_preset_frag(frag_body)
-        );
-        let prog = create_program(gl, FULLSCREEN_VERT, &frag_with_gamma)?;
+        let prog = create_program(gl, FULLSCREEN_VERT, &build_preset_frag(frag_body))?;
 
         let vao = gl.create_vertex_array().ok_or("create_vertex_array")?;
         let vbo = gl.create_buffer().ok_or("create_buffer")?;

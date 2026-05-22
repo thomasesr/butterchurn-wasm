@@ -48,19 +48,21 @@ pub fn create_program(gl: &GL, vert_src: &str, frag_src: &str) -> Result<WebGlPr
     Ok(prog)
 }
 
-/// Create an RGBA32F texture at given size with CLAMP_TO_EDGE / LINEAR.
+/// Create an RGBA8 render target (CLAMP_TO_EDGE / LINEAR).
+/// RGBA32F requires EXT_color_buffer_float which isn't universally available;
+/// RGBA8 is always renderable and sufficient for visual quality.
 pub fn create_texture_f32(gl: &GL, w: i32, h: i32) -> Result<WebGlTexture, String> {
     let tex = gl.create_texture().ok_or("create_texture failed")?;
     gl.bind_texture(GL::TEXTURE_2D, Some(&tex));
     gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
         GL::TEXTURE_2D,
         0,
-        GL::RGBA32F as i32,
+        GL::RGBA as i32,
         w,
         h,
         0,
         GL::RGBA,
-        GL::FLOAT,
+        GL::UNSIGNED_BYTE,
         None,
     )
     .map_err(|e| format!("tex_image_2d: {:?}", e))?;
@@ -135,6 +137,7 @@ pub const FRAG_HEADER: &str = r#"#version 300 es
 precision highp float;
 precision highp int;
 precision mediump sampler2D;
+precision mediump sampler3D;
 
 in vec2 uv;
 in vec2 uv_orig;
@@ -168,6 +171,8 @@ uniform vec4  texsize_noise_lq;
 uniform vec4  texsize_noise_mq;
 uniform vec4  texsize_noise_hq;
 uniform vec4  texsize_noise_lq_lite;
+
+uniform float gammaadj;
 
 uniform float bass;     uniform float bass_att;
 uniform float mid;      uniform float mid_att;

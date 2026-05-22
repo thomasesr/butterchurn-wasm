@@ -84,6 +84,14 @@ impl Renderer {
         ];
         let fb_output = FrameBuffer::new(&gl, tex_w, tex_h)?;
 
+        // Seed both ping-pong buffers so the first warp pass has non-black to decay.
+        for i in 0..2 {
+            gl.bind_framebuffer(GL::FRAMEBUFFER, Some(&fb_main[i].fb));
+            gl.clear_color(0.04, 0.02, 0.08, 1.0);
+            gl.clear(GL::COLOR_BUFFER_BIT);
+        }
+        gl.bind_framebuffer(GL::FRAMEBUFFER, None);
+
         let (warp_body, comp_body) = if let Some(p) = preset {
             (p.warp_glsl.as_str(), p.comp_glsl.as_str())
         } else {

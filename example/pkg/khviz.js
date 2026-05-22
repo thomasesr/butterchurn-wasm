@@ -138,6 +138,12 @@ function __wbg_get_imports() {
             const ret = arg0.checkFramebufferStatus(arg1 >>> 0);
             return ret;
         },
+        __wbg_clearColor_51469dc971dfbcb1: function(arg0, arg1, arg2, arg3, arg4) {
+            arg0.clearColor(arg1, arg2, arg3, arg4);
+        },
+        __wbg_clear_a9bb0742cea539be: function(arg0, arg1) {
+            arg0.clear(arg1 >>> 0);
+        },
         __wbg_compileShader_ec8d5eb7f2b70a48: function(arg0, arg1) {
             arg0.compileShader(arg1);
         },

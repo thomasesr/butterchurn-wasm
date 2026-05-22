@@ -7,7 +7,7 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #000; color: #fff; font-family: monospace; overflow: hidden; }
-    canvas { display: block; width: 100vw; height: 100vh; }
+    canvas { display: block; position: fixed; top: 0; left: 0; width: 100%; height: 100%; outline: 3px solid #f0f; }
     #ui {
       position: fixed; top: 12px; left: 12px; z-index: 10;
       display: flex; flex-direction: column; gap: 8px;
@@ -30,7 +30,15 @@
     <div id="preset-name"></div>
     <div id="fps"></div>
     <button id="btn-next">Next Preset</button>
-    <button id="btn-audio">Start Audio (mic)</button>
+    <button id="btn-mic">Use Mic</button>
+    <button id="btn-file">Load Audio File</button>
+    <input type="file" id="inp-file" accept="audio/*" style="display:none" />
+    <label style="font-size:11px;color:#aaa">
+      Sensitivity
+      <input type="range" id="sensitivity" min="0.5" max="20" step="0.1" value="4"
+             style="width:120px;vertical-align:middle" />
+      <span id="sens-val">4.0×</span>
+    </label>
   </div>
 
   <script type="module">
@@ -38,25 +46,27 @@
 
     // ── Synthetic preset (minimal, uses pre-compiled shaders omitted here) ──────
     // A minimal no-op preset with just baseVals so we can test the plumbing.
+    const WAVE = (r, g, b) => ({
+      baseVals: {
+        enabled: 1, r, g, b, a: 0.9,
+        samples: 512, scaling: 1.0, smoothing: 0.6,
+        additive: 0, spectrum: 0, thick: 1, sep: 0,
+      },
+      init_eqs_eel: '', frame_eqs_eel: '',
+    });
+
     const MINIMAL_PRESET = {
       version: 2,
       baseVals: {
-        decay: 0.96,
-        zoom: 1.01,
-        zoomexp: 1.0,
-        rot: 0.004,
-        warp: 0.03,
-        warpscale: 1.0,
-        warpanimspeed: 1.0,
-        cx: 0.5, cy: 0.5,
-        dx: 0.0, dy: 0.0,
-        sx: 1.0, sy: 1.0,
-        wave_mode: 0,
-        wave_a: 0.8, wave_r: 0.5, wave_g: 0.8, wave_b: 1.0,
+        decay: 0.96, zoom: 1.01, zoomexp: 1.0,
+        rot: 0.004, warp: 0.03, warpscale: 1.0, warpanimspeed: 1.0,
+        cx: 0.5, cy: 0.5, dx: 0.0, dy: 0.0, sx: 1.0, sy: 1.0,
+        wave_mode: 0, wave_a: 0.8,
+        wave_r: 0.5, wave_g: 0.8, wave_b: 1.0,
         wave_x: 0.5, wave_y: 0.5, wave_scale: 1.5,
         gammaadj: 1.25,
       },
-      waves: [],
+      waves: [WAVE(0.5, 0.8, 1.0)],
       shapes: [],
       init_eqs_eel: '',
       frame_eqs_eel: 'q1 = sin(time) * 0.5 + 0.5;',
@@ -67,11 +77,11 @@
     // ── Preset library ──────────────────────────────────────────────────────────
     // Ideally import from butterchurn-presets; here we cycle through variations.
     const PRESETS = [
-      { ...MINIMAL_PRESET, baseVals: { ...MINIMAL_PRESET.baseVals, wave_r: 1.0, wave_g: 0.2, wave_b: 0.2, rot: 0.01 } },
-      { ...MINIMAL_PRESET, baseVals: { ...MINIMAL_PRESET.baseVals, wave_r: 0.2, wave_g: 1.0, wave_b: 0.2, zoom: 1.02, warp: 0.06 } },
-      { ...MINIMAL_PRESET, baseVals: { ...MINIMAL_PRESET.baseVals, wave_r: 0.2, wave_g: 0.5, wave_b: 1.0, zoom: 0.99, rot: -0.005 } },
-      { ...MINIMAL_PRESET, baseVals: { ...MINIMAL_PRESET.baseVals, wave_mode: 1, wave_r: 1.0, wave_g: 1.0, wave_b: 0.0, decay: 0.92 } },
-      { ...MINIMAL_PRESET, baseVals: { ...MINIMAL_PRESET.baseVals, wave_mode: 4, wave_r: 1.0, wave_g: 0.5, wave_b: 1.0, zoom: 1.015 } },
+      { ...MINIMAL_PRESET, waves: [WAVE(1.0, 0.3, 0.3)], baseVals: { ...MINIMAL_PRESET.baseVals, rot: 0.01 } },
+      { ...MINIMAL_PRESET, waves: [WAVE(0.3, 1.0, 0.3)], baseVals: { ...MINIMAL_PRESET.baseVals, zoom: 1.02, warp: 0.06 } },
+      { ...MINIMAL_PRESET, waves: [WAVE(0.3, 0.6, 1.0)], baseVals: { ...MINIMAL_PRESET.baseVals, zoom: 0.99, rot: -0.005 } },
+      { ...MINIMAL_PRESET, waves: [WAVE(1.0, 1.0, 0.2)], baseVals: { ...MINIMAL_PRESET.baseVals, decay: 0.92, warp: 0.08 } },
+      { ...MINIMAL_PRESET, waves: [WAVE(1.0, 0.4, 1.0)], baseVals: { ...MINIMAL_PRESET.baseVals, zoom: 1.015, rot: 0.008, warpanimspeed: 2.0 } },
     ];
     const PRESET_NAMES = [
       'Red Spiral', 'Green Zoom', 'Blue Zoom Out', 'Yellow Horizontal', 'Purple Orbit',
@@ -117,8 +127,9 @@
       status.textContent = 'Ready';
 
       const canvas = document.getElementById('canvas');
-      const W = window.innerWidth;
-      const H = window.innerHeight;
+      const DPR = window.devicePixelRatio || 1;
+      const W = Math.round(window.innerWidth * DPR);
+      const H = Math.round(window.innerHeight * DPR);
       canvas.width = W;
       canvas.height = H;
 
@@ -134,7 +145,7 @@
       let presetIdx = 0;
       function loadPreset(idx, blendTime = 2.0) {
         try {
-          viz.loadPreset(PRESETS[idx], blendTime);
+          viz.load_preset(PRESETS[idx], blendTime);
           presetName.textContent = PRESET_NAMES[idx];
           status.textContent = '';
         } catch (e) {
@@ -149,29 +160,235 @@
         loadPreset(presetIdx, 2.0);
       };
 
-      // Optional mic input
-      let micAnalyser = null;
-      let micTd = null, micFr = null;
-      document.getElementById('btn-audio').onclick = async () => {
+      // ── Audio routing ──────────────────────────────────────────────────────────
+      let analyser = null;
+      let audioBuf = new Float32Array(2048);
+      let audioFreq = new Float32Array(1024);
+
+      function makeAnalyser(ctx) {
+        const a = ctx.createAnalyser();
+        a.fftSize = 2048;
+        a.smoothingTimeConstant = 0.5;
+        analyser = a;
+        audioBuf = new Float32Array(a.fftSize);
+        audioFreq = new Float32Array(a.frequencyBinCount);
+        return a;
+      }
+
+      // ── Oscillator demo track ──────────────────────────────────────────────────
+      let demoCtx = null;
+      let demoActive = false;
+
+      function startDemoTrack() {
+        if (demoActive) return;
+        demoActive = true;
+        demoCtx = new AudioContext();
+        const master = makeAnalyser(demoCtx);
+        master.connect(demoCtx.destination);
+
+        const BPM = 128;
+        const BEAT = 60 / BPM;
+
+        // ── Bass oscillator (60 Hz, beat-gated) ───────────────────────────────
+        function kick(t) {
+          const osc = demoCtx.createOscillator();
+          const gain = demoCtx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(160, t);
+          osc.frequency.exponentialRampToValueAtTime(40, t + 0.08);
+          gain.gain.setValueAtTime(1.4, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+          osc.connect(gain); gain.connect(master);
+          osc.start(t); osc.stop(t + 0.3);
+        }
+
+        function bass(t, freq) {
+          const osc = demoCtx.createOscillator();
+          const gain = demoCtx.createGain();
+          osc.type = 'sawtooth';
+          osc.frequency.value = freq;
+          gain.gain.setValueAtTime(0.5, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + BEAT * 1.9);
+          osc.connect(gain); gain.connect(master);
+          osc.start(t); osc.stop(t + BEAT * 2);
+        }
+
+        function hihat(t, open = false) {
+          const bufSize = demoCtx.sampleRate * 0.05;
+          const buf = demoCtx.createBuffer(1, bufSize, demoCtx.sampleRate);
+          const data = buf.getChannelData(0);
+          for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+          const src = demoCtx.createBufferSource();
+          src.buffer = buf;
+          const hp = demoCtx.createBiquadFilter();
+          hp.type = 'highpass'; hp.frequency.value = 8000;
+          const gain = demoCtx.createGain();
+          gain.gain.setValueAtTime(open ? 0.25 : 0.12, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + (open ? 0.18 : 0.04));
+          src.connect(hp); hp.connect(gain); gain.connect(master);
+          src.start(t); src.stop(t + 0.2);
+        }
+
+        const BASS_NOTES = [55, 55, 65, 55, 49, 49, 55, 58];
+        const SYNTH_NOTES = [220, 277, 330, 440, 330, 277, 220, 165];
+
+        function scheduleBar(barStart, barIdx) {
+          const B = BEAT;
+          // kicks on 1 and 3
+          kick(barStart);
+          kick(barStart + B * 2);
+          // hats on 2 and 4, 8ths elsewhere
+          for (let i = 0; i < 8; i++) {
+            hihat(barStart + i * B * 0.5, i === 2 || i === 6);
+          }
+          // bass line
+          bass(barStart, BASS_NOTES[barIdx % 8]);
+          bass(barStart + B * 2, BASS_NOTES[(barIdx + 1) % 8]);
+          // synth lead
+          const note = SYNTH_NOTES[barIdx % 8];
+          const osc = demoCtx.createOscillator();
+          const gn = demoCtx.createGain();
+          osc.type = 'triangle';
+          osc.frequency.value = note;
+          gn.gain.setValueAtTime(0.3, barStart);
+          gn.gain.exponentialRampToValueAtTime(0.001, barStart + B * 3.8);
+          osc.connect(gn); gn.connect(master);
+          osc.start(barStart); osc.stop(barStart + B * 4);
+        }
+
+        // Schedule 4 bars at a time, loop indefinitely
+        let nextBar = demoCtx.currentTime + 0.05;
+        let barIdx = 0;
+        function scheduleAhead() {
+          const LOOK = 1.5; // seconds lookahead
+          const BAR = BEAT * 4;
+          while (nextBar < demoCtx.currentTime + LOOK) {
+            scheduleBar(nextBar, barIdx++);
+            nextBar += BAR;
+          }
+        }
+        scheduleAhead();
+        const schedTimer = setInterval(scheduleAhead, 500);
+        // Store timer so we can clear on switch
+        demoCtx._schedTimer = schedTimer;
+
+        document.getElementById('btn-file').textContent = 'Demo ✓';
+        status.textContent = '';
+      }
+
+      // ── Mic ───────────────────────────────────────────────────────────────────
+      document.getElementById('btn-mic').onclick = async () => {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          status.textContent = 'Mic needs HTTPS/localhost — loading demo track instead';
+          startDemoTrack();
+          return;
+        }
         try {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           const ctx = new AudioContext();
           const src = ctx.createMediaStreamSource(stream);
-          const analyser = ctx.createAnalyser();
-          analyser.fftSize = 2048;
-          src.connect(analyser);
-          micTd = new Float32Array(analyser.fftSize);
-          micFr = new Float32Array(analyser.frequencyBinCount);
-          micAnalyser = analyser;
-          document.getElementById('btn-audio').textContent = 'Mic active ✓';
+          src.connect(makeAnalyser(ctx));
+          document.getElementById('btn-mic').textContent = 'Mic ✓';
+          status.textContent = '';
         } catch (e) {
-          status.textContent = 'Mic error: ' + e;
+          status.textContent = 'Mic failed, loading demo track';
+          startDemoTrack();
         }
       };
+
+      // ── MP3 / audio file ──────────────────────────────────────────────────────
+      const btnFile = document.getElementById('btn-file');
+      const inpFile = document.getElementById('inp-file');
+      btnFile.onclick = () => inpFile.click();
+      inpFile.onchange = async () => {
+        const file = inpFile.files[0];
+        if (!file) return;
+        const ctx = new AudioContext();
+        const arrayBuf = await file.arrayBuffer();
+        let decoded;
+        try {
+          decoded = await ctx.decodeAudioData(arrayBuf);
+        } catch (e) {
+          status.textContent = 'Decode failed: ' + e;
+          return;
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = decoded;
+        src.loop = true;
+        src.connect(makeAnalyser(ctx));
+        analyser.connect(ctx.destination); // hear it too
+        src.start();
+        btnFile.textContent = file.name.slice(0, 20) + ' ✓';
+        status.textContent = '';
+      };
+
+      // ── archive.org audio (primary source) ───────────────────────────────────
+      const AUDIO_URLS = [
+        'https://archive.org/download/windows-95-startup-and-shutdown-sounds/Windows%2095%20Startup%20and%20Shutdown%20Sounds.mp3',
+        'https://archive.org/download/windows-95-startup-and-shutdown-sounds/Windows%2095%20Startup%20and%20Shutdown%20Sounds.wav',
+      ];
+
+      let archiveBuf = null; // decoded AudioBuffer, cached after first fetch
+
+      async function fetchArchiveAudio() {
+        for (const url of AUDIO_URLS) {
+          try {
+            const res = await fetch(url, { mode: 'cors' });
+            if (!res.ok) continue;
+            const ab = await res.arrayBuffer();
+            // Need AudioContext to decode — create a throwaway one
+            const tmpCtx = new AudioContext();
+            archiveBuf = await tmpCtx.decodeAudioData(ab);
+            await tmpCtx.close();
+            return true;
+          } catch (_) { /* try next */ }
+        }
+        return false;
+      }
+
+      async function startArchiveAudio() {
+        if (!archiveBuf) {
+          status.textContent = 'Fetching audio…';
+          const ok = await fetchArchiveAudio();
+          if (!ok) {
+            status.textContent = 'Fetch failed — using demo track';
+            startDemoTrack();
+            return;
+          }
+        }
+        const ctx = new AudioContext();
+        const src = ctx.createBufferSource();
+        src.buffer = archiveBuf;
+        src.loop = true;
+        const a = makeAnalyser(ctx);
+        src.connect(a);
+        a.connect(ctx.destination);
+        src.start();
+        btnFile.textContent = 'Win95 ✓';
+        status.textContent = '';
+      }
+
+      // Pre-fetch in background immediately (no AudioContext yet, just XHR)
+      fetchArchiveAudio().catch(() => {});
+
+      // Start audio on first user gesture — prefer archive track
+      let audioStarted = false;
+      async function onFirstGesture() {
+        if (audioStarted || analyser) return;
+        audioStarted = true;
+        await startArchiveAudio();
+      }
+      document.addEventListener('click', onFirstGesture, { once: true });
 
       // Auto-advance presets every 12 s
       let lastAutoSwitch = performance.now();
       const AUTO_INTERVAL = 12000;
+
+      const sensSlider = document.getElementById('sensitivity');
+      const sensVal = document.getElementById('sens-val');
+      sensSlider.addEventListener('input', () => {
+        sensVal.textContent = parseFloat(sensSlider.value).toFixed(1) + '×';
+      });
 
       let frameCount = 0;
       let lastFpsTime = performance.now();
@@ -194,15 +411,25 @@
 
         // Audio data
         const t = now / 1000;
-        if (micAnalyser) {
-          micAnalyser.getFloatTimeDomainData(micTd);
-          micAnalyser.getFloatFrequencyData(micFr);
-          // convert dB to linear
-          const linFr = micFr.map(db => Math.pow(10, db / 20));
-          viz.setAudioData(micTd, new Float32Array(linFr));
+        const sensitivity = parseFloat(document.getElementById('sensitivity').value) || 4.0;
+        if (analyser) {
+          analyser.getFloatTimeDomainData(audioBuf);
+          analyser.getFloatFrequencyData(audioFreq);
+          // AnalyserNode getFloatFrequencyData returns dB; convert to linear
+          const linFr = new Float32Array(audioFreq.length);
+          for (let i = 0; i < audioFreq.length; i++)
+            linFr[i] = Math.pow(10, audioFreq[i] / 20) * sensitivity;
+          const scaledTd = new Float32Array(audioBuf.length);
+          for (let i = 0; i < audioBuf.length; i++)
+            scaledTd[i] = audioBuf[i] * sensitivity;
+          viz.set_audio_data(scaledTd, linFr);
         } else {
           const { td, fr } = makeSyntheticAudio(t);
-          viz.setAudioData(td, fr);
+          const scaledTd = new Float32Array(td.length);
+          const scaledFr = new Float32Array(fr.length);
+          for (let i = 0; i < td.length; i++) scaledTd[i] = td[i] * sensitivity;
+          for (let i = 0; i < fr.length; i++) scaledFr[i] = fr[i] * sensitivity;
+          viz.set_audio_data(scaledTd, scaledFr);
         }
 
         viz.render(now);
@@ -212,9 +439,10 @@
 
       // Resize
       window.addEventListener('resize', () => {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-        viz.setRendererSize(canvas.width, canvas.height);
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.round(window.innerWidth * dpr);
+        canvas.height = Math.round(window.innerHeight * dpr);
+        viz.set_renderer_size(canvas.width, canvas.height);
       });
     }
 
